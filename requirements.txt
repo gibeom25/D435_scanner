@@ -1,0 +1,7 @@
+pyrealsense2
+open3d
+trimesh
+pymeshfix
+opencv-python
+scipy
+shapely

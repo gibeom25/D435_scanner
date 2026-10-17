@@ -1,0 +1,10 @@
+scans/
+.venv/
+__pycache__/
+logs/
+build/
+dist/
+installer/
+*.ply
+*.stl
+*.npz
