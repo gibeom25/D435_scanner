@@ -2,7 +2,7 @@
 ; 먼저 packaging\build.bat 로 dist\D435 Scanner 를 만든 뒤 컴파일한다 (build.bat이 둘 다 한다).
 
 #define AppName "D435 Scanner"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppExe "D435 Scanner.exe"
 
 [Setup]

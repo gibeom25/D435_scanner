@@ -54,6 +54,10 @@ class ScanConfig:
     # 검은 머리카락 등에서 구멍이 많이 생기면 "default"나 "high_density"로.
     preset: str = "high_accuracy"
     subject_half_depth: float = 0.3
+    # 근거리: D435는 시차(disparity)를 0~126픽셀만 찾으므로 측정 가능한 최소 거리가
+    # fx·기준선/126 (640×480에서 약 15cm)이다. 시차 이동(disparity shift) S를 주면 범위가
+    # fx·B/(126+S) ~ fx·B/S 로 가까워진다. None이면 최대 거리에 맞춰 자동으로 정한다.
+    disparity_shift: int | None = None
 
 
 class RealSense:
@@ -86,6 +90,8 @@ class RealSense:
             rng = depth_sensor.get_option_range(rs.option.laser_power)
             depth_sensor.set_option(rs.option.laser_power, rng.max)
 
+        self.shift, self.hw_min, self.hw_max = self._set_disparity_shift(dev, depth_sensor, profile, cfg)
+
         self.align = rs.align(rs.stream.color)
         self.spatial = rs.spatial_filter()
         self.spatial.set_option(rs.option.filter_magnitude, 2)
@@ -97,6 +103,53 @@ class RealSense:
         # 자동 노출이 안정될 때까지 몇 프레임 버림
         for _ in range(15):
             self.pipe.wait_for_frames()
+
+    @staticmethod
+    def _set_disparity_shift(dev, depth_sensor, profile, cfg):
+        """측정 거리 범위를 최대 거리에 맞춘다. 반환: (shift, 측정 가능한 최소 m, 최대 m).
+        시차 이동은 카메라에 남아 있으므로 근거리가 아닐 때도 매번 0으로 되돌린다."""
+        fx = profile.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics().fx
+        base = depth_sensor.get_option(rs.option.stereo_baseline) / 1000.0 \
+            if depth_sensor.supports(rs.option.stereo_baseline) else 0.050
+        fb = fx * base
+        if cfg.disparity_shift is not None:
+            shift = int(cfg.disparity_shift)
+        elif cfg.depth_max < 0.5:
+            shift = int(fb / (cfg.depth_max * 1.1))     # 최대 거리보다 10% 여유
+        else:
+            shift = 0
+        shift = int(np.clip(shift, 0, 200))
+        if shift and cfg.preset == "high_accuracy":
+            # high_accuracy는 불확실한 픽셀을 엄격하게 버려서 근거리에서는 거의 다 사라진다
+            # (실측 10cm 물체: high_accuracy 0.3% / default 14.5% 픽셀). 근거리는 default로.
+            print("근거리 스캔: 깊이 프리셋을 default로 바꿉니다 (high_accuracy는 가까운 곳을 거의 버림)")
+            depth_sensor.set_option(rs.option.visual_preset, 1)
+            if depth_sensor.supports(rs.option.laser_power):
+                depth_sensor.set_option(rs.option.laser_power, depth_sensor.get_option_range(rs.option.laser_power).max)
+        try:
+            adv = rs.rs400_advanced_mode(dev)
+            if adv.is_enabled():
+                t = adv.get_depth_table()
+                if t.disparityShift != shift:
+                    t.disparityShift = shift
+                    adv.set_depth_table(t)
+            elif shift:
+                print("근거리 설정에는 카메라 고급 모드가 필요합니다. 켜는 중... (카메라가 다시 연결되며, 한 번만 하면 됩니다)")
+                adv.toggle_advanced_mode(True)
+                raise RuntimeError("카메라 고급 모드를 켰습니다. 카메라가 다시 연결되면 스캔을 다시 시작하세요.")
+        except RuntimeError:
+            raise
+        except Exception as e:  # noqa: BLE001 - 고급 모드를 못 쓰면 기본 범위로
+            print(f"근거리 설정 실패 (기본 범위로 진행): {e}")
+            shift = 0
+        hw_min = fb / (126 + shift)
+        hw_max = fb / shift if shift else float("inf")
+        if shift:
+            print(f"근거리 설정: 시차 이동 {shift} → 측정 가능 거리 약 {hw_min * 100:.0f}~{hw_max * 100:.0f}cm")
+        if cfg.depth_min < hw_min * 0.95:
+            print(f"참고: 이 카메라는 약 {hw_min * 100:.0f}cm보다 가까운 곳은 측정할 수 없습니다 "
+                  f"(설정한 최소 거리 {cfg.depth_min * 100:.0f}cm)")
+        return shift, hw_min, hw_max
 
     def read(self):
         frames = self.align.process(self.pipe.wait_for_frames())
@@ -530,6 +583,8 @@ def run_scan(cfg: ScanConfig):
                 rng = f"subject {center:.2f} m +-{cfg.subject_half_depth:.1f}" if center else "no subject in center"
             else:
                 rng = f"range {cfg.depth_min:.2f}-{cfg.depth_max:.2f} m   [ ] far  , . near"
+                if cfg.depth_min < cam.hw_min * 0.95:
+                    rng += f"   (camera min ~{cam.hw_min * 100:.0f} cm)"
             elapsed = f"  {time.time() - t_start:.0f}s" if running and t_start else ""
             _overlay(live, [f"{state}  frames={fusion.integrated}{elapsed}", msg, rng], col)
 

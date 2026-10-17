@@ -152,16 +152,19 @@ class Launcher:
         grid.add_child(gui.Label("깊이 프리셋"))
         grid.add_child(self.preset)
         self.dmin = gui.Slider(gui.Slider.INT)
-        self.dmin.set_limits(10, 150)
+        self.dmin.set_limits(5, 150)
         self.dmin.int_value = int(self.cfg.get("min_depth_cm", 15))
         grid.add_child(gui.Label("물체 스캔 최소 거리 (cm)"))
         grid.add_child(self.dmin)
         self.dmax = gui.Slider(gui.Slider.INT)
-        self.dmax.set_limits(30, 300)
+        self.dmax.set_limits(20, 300)
         self.dmax.int_value = int(self.cfg.get("max_depth_cm", 100))
         grid.add_child(gui.Label("물체 스캔 최대 거리 (cm)"))
         grid.add_child(self.dmax)
         root.add_child(grid)
+        buttons(("아주 가까이 (9~22cm)", lambda: self._set_range(9, 22)),
+                ("가까이 (10~30cm)", lambda: self._set_range(10, 30)),
+                ("보통 (15~100cm)", lambda: self._set_range(15, 100)))
         self.cb_norefine = gui.Checkbox("정밀 재구성 건너뛰기 (빠르지만 거침)")
         root.add_child(self.cb_norefine)
         hint("해상도: 작을수록 세밀하지만 느림 · 머리카락에 구멍이 많으면 프리셋 default")
@@ -246,12 +249,18 @@ class Launcher:
                 self.status.text = "최대 거리는 최소 거리보다 10cm 이상 커야 합니다."
                 return
             args += ["--min-depth", f"{self.dmin.int_value / 100:.2f}", "--max-depth", f"{self.dmax.int_value / 100:.2f}"]
+            if self.dmax.int_value <= 40:
+                args += ["--voxel", "0.002"]   # 가까이서 찍는 작은 물체는 실시간 미리보기도 2mm로
         if self.cb_norefine.checked:
             args.append("--no-refine")
         if any(t.code is None and t.name.endswith("스캔") for t in self.tasks):
             self.status.text = "이미 스캔 중입니다. 카메라는 한 번에 하나의 스캔만 쓸 수 있습니다."
             return
         self._run("사람 스캔" if subject else "물체 스캔", args)
+
+    def _set_range(self, lo, hi):
+        self.dmin.int_value, self.dmax.int_value = lo, hi
+        self.status.text = f"물체 스캔 거리: {lo}~{hi}cm"
 
     def _open_editor(self):
         self._run("편집기", ["--load"])
