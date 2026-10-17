@@ -249,8 +249,6 @@ class Launcher:
                 self.status.text = "최대 거리는 최소 거리보다 10cm 이상 커야 합니다."
                 return
             args += ["--min-depth", f"{self.dmin.int_value / 100:.2f}", "--max-depth", f"{self.dmax.int_value / 100:.2f}"]
-            if self.dmax.int_value <= 40:
-                args += ["--voxel", "0.002"]   # 가까이서 찍는 작은 물체는 실시간 미리보기도 2mm로
         if self.cb_norefine.checked:
             args.append("--no-refine")
         if any(t.code is None and t.name.endswith("스캔") for t in self.tasks):
@@ -260,7 +258,9 @@ class Launcher:
 
     def _set_range(self, lo, hi):
         self.dmin.int_value, self.dmax.int_value = lo, hi
-        self.status.text = f"물체 스캔 거리: {lo}~{hi}cm"
+        self.cfg["min_depth_cm"], self.cfg["max_depth_cm"] = lo, hi
+        save_config(self.cfg)   # 스캔하기.bat 등 명령줄 실행도 이 거리를 쓴다
+        self.status.text = f"물체 스캔 거리: {lo}~{hi}cm (저장됨)"
 
     def _open_editor(self):
         self._run("편집기", ["--load"])

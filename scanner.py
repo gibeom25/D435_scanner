@@ -83,6 +83,18 @@ def _refine_recordings(recs, voxel, out_dir, seam_ref=None):
     return v, f, c
 
 
+def _saved_range():
+    """실행 화면에서 마지막으로 정한 물체 스캔 거리 (m). .bat으로 실행해도 같은 설정을 쓰도록."""
+    import json
+    path = os.path.join(os.environ.get("APPDATA", HERE), "D435Scanner", "config.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fp:
+            cfg = json.load(fp)
+        return float(cfg["min_depth_cm"]) / 100, float(cfg["max_depth_cm"]) / 100
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0.15, 1.0
+
+
 def _find_recording(path):
     p = os.path.abspath(path)
     if os.path.isdir(p):
@@ -109,9 +121,13 @@ def main():
                     help="마지막 연결: 끝 장면과 순서대로 비교할 처음 장면 수 N (기본 10)")
     ap.add_argument("--refine-voxel", type=float, default=0.002,
                     help="정밀 재구성 복셀 크기 m (기본 0.002 = 2mm, 작을수록 세밀하지만 느림)")
-    ap.add_argument("--voxel", type=float, default=0.004, help="복셀 크기 m (기본 0.004 = 4mm)")
-    ap.add_argument("--min-depth", type=float, default=0.15, help="최소 거리 m (기본 0.15)")
-    ap.add_argument("--max-depth", type=float, default=1.0, help="최대 거리 m (기본 1.0)")
+    near, far = _saved_range()
+    ap.add_argument("--voxel", type=float, default=None,
+                    help="실시간 복셀 크기 m (기본: 최대 거리 40cm 이하면 0.002, 아니면 0.004)")
+    ap.add_argument("--min-depth", type=float, default=near,
+                    help=f"최소 거리 m (기본: 실행 화면에서 정한 값, 지금 {near:.2f})")
+    ap.add_argument("--max-depth", type=float, default=far,
+                    help=f"최대 거리 m (기본: 실행 화면에서 정한 값, 지금 {far:.2f})")
     ap.add_argument("--subject", action="store_true",
                     help="사람 스캔 모드: 카메라 고정 + 회전의자, 배경 자동 제거")
     ap.add_argument("--preset", default="high_accuracy", choices=["high_accuracy", "default", "high_density"],
@@ -180,7 +196,8 @@ def main():
         v, f, c = res
     else:
         from scan import ScanConfig, run_scan
-        cfg = ScanConfig(voxel_size=args.voxel, depth_min=args.min_depth, depth_max=args.max_depth,
+        voxel = args.voxel if args.voxel is not None else (0.002 if args.max_depth <= 0.40 else 0.004)
+        cfg = ScanConfig(voxel_size=voxel, depth_min=args.min_depth, depth_max=args.max_depth,
                          subject_mode=args.subject, subject_half_depth=args.subject_depth,
                          preset=args.preset)
         if args.subject:
