@@ -23,6 +23,7 @@ reg = o3d.pipelines.registration
 class RefineConfig:
     stride: int = 2                 # 키프레임 간격 (프레임)
     voxel_size: float = 0.002       # 정밀 재구성은 2mm (실시간은 4mm). 얼굴 윤곽이 살아남
+    depth_min: float = 0.0
     depth_max: float = 1.0
     feature_inlier_m: float = 0.012  # 특징점 RANSAC 허용 오차
     min_feature_inliers: int = 12
@@ -168,7 +169,7 @@ class Refiner:
         c = self.cfg
         k.depth = clean_depth(k.depth, self.scale)
         z = k.depth.astype(np.float32) / self.scale
-        z[z > c.depth_max] = 0
+        z[(z > c.depth_max) | (z < c.depth_min)] = 0
         k.depth[z == 0] = 0
         # 정합에 쓸 영역 (사람 모드면 머리만). 융합에는 k.depth 전체를 그대로 쓴다.
         zr = self._head_only(z) if (self.subject and c.head_only_registration) else z

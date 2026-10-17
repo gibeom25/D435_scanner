@@ -126,27 +126,46 @@ def transform(vertices, T):
 
 @dataclass
 class Box:
-    """z축 회전만 허용하는 자르기 박스 (단위: m, 정렬된 장면 좌표)."""
+    """X·Y·Z축으로 회전할 수 있는 자르기 박스 (단위: m, 정렬된 장면 좌표).
+    xmin~zmax는 박스 좌표에서의 범위. 회전은 회전 중심(pivot, 보통 처음 박스의 가운데)을 기준으로
+    X → Y → Z 순서로 적용한다 (R = Rz·Ry·Rx). 회전이 0이면 박스 좌표 = 장면 좌표."""
     xmin: float
     xmax: float
     ymin: float
     ymax: float
     zmin: float
     zmax: float
-    yaw_deg: float = 0.0
+    rx_deg: float = 0.0
+    ry_deg: float = 0.0
+    rz_deg: float = 0.0
+    pivot: tuple | None = None    # None이면 범위의 가운데
+
+    def center(self):
+        if self.pivot is not None:
+            return np.asarray(self.pivot, float)
+        return np.array([(self.xmin + self.xmax) / 2, (self.ymin + self.ymax) / 2, (self.zmin + self.zmax) / 2])
 
     def rotation(self):
-        t = np.deg2rad(self.yaw_deg)
-        return np.array([[np.cos(t), -np.sin(t), 0], [np.sin(t), np.cos(t), 0], [0, 0, 1]])
+        x, y, z = np.deg2rad([self.rx_deg, self.ry_deg, self.rz_deg])
+        Rx = np.array([[1, 0, 0], [0, np.cos(x), -np.sin(x)], [0, np.sin(x), np.cos(x)]])
+        Ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]])
+        Rz = np.array([[np.cos(z), -np.sin(z), 0], [np.sin(z), np.cos(z), 0], [0, 0, 1]])
+        return Rz @ Ry @ Rx
 
     def to_local(self, pts):
-        """장면 좌표 → 박스 좌표 (박스는 원점 기준으로 yaw 회전)."""
-        return pts @ self.rotation()  # == (R^T p^T)^T
+        """장면 좌표 → 박스 좌표."""
+        c = self.center()
+        return (np.asarray(pts) - c) @ self.rotation() + c   # 행 벡터라 R^T 대신 오른쪽 곱
+
+    def to_world(self, pts):
+        """박스 좌표 → 장면 좌표."""
+        c = self.center()
+        return (np.asarray(pts) - c) @ self.rotation().T + c
 
     def corners(self):
         xs, ys, zs = (self.xmin, self.xmax), (self.ymin, self.ymax), (self.zmin, self.zmax)
         local = np.array([[x, y, z] for x in xs for y in ys for z in zs])
-        return local @ self.rotation().T
+        return self.to_world(local)
 
     def lineset(self, color=(1.0, 0.55, 0.0)):
         edges = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3],
@@ -170,9 +189,12 @@ def suggest_box(vertices, faces, floor_found, pad=0.01):
         pts = vertices[np.unique(sel)]
         lo, hi = pts.min(axis=0), pts.max(axis=0)
         zmin = 0.003 if floor_found else lo[2] - pad
-        return Box(lo[0] - pad, hi[0] + pad, lo[1] - pad, hi[1] + pad, zmin, hi[2] + pad)
-    lo, hi = vertices.min(axis=0), vertices.max(axis=0)
-    return Box(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
+        b = Box(lo[0] - pad, hi[0] + pad, lo[1] - pad, hi[1] + pad, zmin, hi[2] + pad)
+    else:
+        lo, hi = vertices.min(axis=0), vertices.max(axis=0)
+        b = Box(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
+    b.pivot = tuple(float(x) for x in b.center())   # 범위를 바꿔도 회전 중심은 그대로 (박스가 튀지 않게)
+    return b
 
 
 def inside_mask(vertices, box):
@@ -189,10 +211,10 @@ def split_by_box(vertices, faces, box):
     return faces[tri_in], faces[~tri_in]
 
 
-def crop_exact(vertices, faces, colors, box):
-    """박스의 6개 면으로 메시를 정확히 잘라낸다 (단면이 평평하게 남음)."""
-    R = box.rotation()
-    local = vertices @ R
+def crop_exact(vertices, faces, colors, box, box_frame=False):
+    """박스의 6개 면으로 메시를 정확히 잘라낸다 (단면이 평평하게 남음).
+    box_frame=True면 결과를 박스 좌표로 돌려준다 (기울인 박스의 바닥면이 수평이 됨)."""
+    local = box.to_local(vertices)
     kwargs = {}
     if colors is not None:
         kwargs["vertex_colors"] = (np.clip(colors, 0, 1) * 255).astype(np.uint8)
@@ -204,7 +226,9 @@ def crop_exact(vertices, faces, colors, box):
         if len(tm.faces) == 0:
             break
         tm = tm.slice_plane(origin, normal)
-    v = np.asarray(tm.vertices) @ R.T
+    v = np.asarray(tm.vertices)
+    if not box_frame:
+        v = box.to_world(v)
     c = None
     if colors is not None and tm.visual.kind == "vertex" and len(tm.vertices):
         c = np.asarray(tm.visual.vertex_colors)[:, :3] / 255.0
@@ -235,7 +259,8 @@ class PrintResult:
 
 def process_for_print(vertices, faces, colors, box, opts: PrintOptions):
     log = []
-    v, f, c = crop_exact(vertices, faces, colors, box)
+    # 박스 좌표로 자른다: 박스를 기울였으면 그 바닥면이 프린터 바닥(z=0)이 된다
+    v, f, c = crop_exact(vertices, faces, colors, box, box_frame=True)
     if len(f) == 0:
         raise ValueError("박스 안에 메시가 없습니다.")
     log.append(f"자르기: 삼각형 {len(f):,}개")

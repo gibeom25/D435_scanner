@@ -94,7 +94,7 @@ class Launcher:
         self.closing = False
 
         app = gui.Application.instance
-        self.window = app.create_window(APP_NAME, 1180, 760)
+        self.window = app.create_window(APP_NAME, 1180, 860)
         w = self.window
         em = w.theme.font_size
         left = gui.Vert(0.4 * em, gui.Margins(em, em, em, em))
@@ -151,10 +151,21 @@ class Launcher:
         self.preset.selected_text = self.cfg.get("preset", "high_accuracy")
         grid.add_child(gui.Label("깊이 프리셋"))
         grid.add_child(self.preset)
+        self.dmin = gui.Slider(gui.Slider.INT)
+        self.dmin.set_limits(10, 150)
+        self.dmin.int_value = int(self.cfg.get("min_depth_cm", 15))
+        grid.add_child(gui.Label("물체 스캔 최소 거리 (cm)"))
+        grid.add_child(self.dmin)
+        self.dmax = gui.Slider(gui.Slider.INT)
+        self.dmax.set_limits(30, 300)
+        self.dmax.int_value = int(self.cfg.get("max_depth_cm", 100))
+        grid.add_child(gui.Label("물체 스캔 최대 거리 (cm)"))
+        grid.add_child(self.dmax)
         root.add_child(grid)
         self.cb_norefine = gui.Checkbox("정밀 재구성 건너뛰기 (빠르지만 거침)")
         root.add_child(self.cb_norefine)
         hint("해상도: 작을수록 세밀하지만 느림 · 머리카락에 구멍이 많으면 프리셋 default")
+        hint("거리 밖은 스캔 창에서 어둡게 보이고 스캔에서 빠짐 · 스캔 창 키: [ ] 최대 거리, 쉼표·마침표 최소 거리")
 
         # ---- 열기 / 편집
         header("2. 열기 · 편집")
@@ -225,10 +236,16 @@ class Launcher:
     def _scan(self, subject):
         self.cfg["refine_voxel_mm"] = round(self.voxel.double_value, 2)
         self.cfg["preset"] = self.preset.selected_text
+        self.cfg["min_depth_cm"], self.cfg["max_depth_cm"] = self.dmin.int_value, self.dmax.int_value
         save_config(self.cfg)
         args = ["--refine-voxel", f"{self.voxel.double_value / 1000:.4f}", "--preset", self.preset.selected_text]
         if subject:
             args.append("--subject")
+        else:
+            if self.dmin.int_value + 10 > self.dmax.int_value:
+                self.status.text = "최대 거리는 최소 거리보다 10cm 이상 커야 합니다."
+                return
+            args += ["--min-depth", f"{self.dmin.int_value / 100:.2f}", "--max-depth", f"{self.dmax.int_value / 100:.2f}"]
         if self.cb_norefine.checked:
             args.append("--no-refine")
         if any(t.code is None and t.name.endswith("스캔") for t in self.tasks):

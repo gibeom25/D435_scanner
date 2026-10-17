@@ -400,6 +400,7 @@ class Recording:
         self.K = np.asarray(K, float)
         self.scale = depth_scale_factor
         self.subject_mode = subject_mode
+        self.depth_min = self.depth_max = None   # 스캔할 때 쓴 거리 범위 (m). 예전 녹화에는 없음
         self.depth, self.color, self.poses, self.passes = [], [], [], []
         self._pool = None
 
@@ -442,6 +443,8 @@ class Recording:
         arrs = {f"d{i:05d}": b for i, b in enumerate(self.depth)}
         arrs.update({f"c{i:05d}": b for i, b in enumerate(self.color)})
         with open(path, "wb") as fh:   # 한글 경로 대응: 파일 핸들로 저장
+            if self.depth_max is not None:
+                arrs["depth_range"] = np.array([self.depth_min, self.depth_max], float)
             np.savez(fh, K=self.K, scale=self.scale, subject=self.subject_mode,
                      poses=np.array(self.poses), passes=np.array(self.passes), **arrs)
 
@@ -455,7 +458,15 @@ class Recording:
             rec.color = [z[f"c{i:05d}"] for i in range(n)]
             rec.poses = list(z["poses"])
             rec.passes = list(z["passes"])
+            if "depth_range" in z.files:
+                rec.depth_min, rec.depth_max = (float(x) for x in z["depth_range"])
         return rec
+
+    def refine_depth_range(self):
+        """정밀 재구성에 쓸 거리 범위 (m). 스캔 때 정한 범위, 없으면(예전 녹화) 예전 기본값."""
+        if self.depth_max is not None:
+            return self.depth_min, self.depth_max
+        return 0.0, (2.0 if self.subject_mode else 1.0)
 
 
 def run_scan(cfg: ScanConfig):
@@ -518,7 +529,7 @@ def run_scan(cfg: ScanConfig):
                 center = subject.center_m if subject.center_m is not None else subject.measure(depth)
                 rng = f"subject {center:.2f} m +-{cfg.subject_half_depth:.1f}" if center else "no subject in center"
             else:
-                rng = f"range {cfg.depth_min:.2f}-{cfg.depth_max:.2f} m"
+                rng = f"range {cfg.depth_min:.2f}-{cfg.depth_max:.2f} m   [ ] far  , . near"
             elapsed = f"  {time.time() - t_start:.0f}s" if running and t_start else ""
             _overlay(live, [f"{state}  frames={fusion.integrated}{elapsed}", msg, rng], col)
 
@@ -559,6 +570,19 @@ def run_scan(cfg: ScanConfig):
                     subject.unlock()
                 print("처음부터 다시")
                 running, last_ok, msg = False, True, "reset - press SPACE"
+            elif not subject and key in (ord("["), ord("]"), ord(","), ord(".")):
+                # 거리 범위 조절 (5cm씩). 범위 밖은 화면에서 어둡게 보이고 스캔에서 빠진다.
+                step = 0.05
+                if key == ord("]"):
+                    cfg.depth_max = min(3.0, cfg.depth_max + step)
+                elif key == ord("["):
+                    cfg.depth_max = max(cfg.depth_min + 0.1, cfg.depth_max - step)
+                elif key == ord("."):
+                    cfg.depth_min = min(cfg.depth_max - 0.1, cfg.depth_min + step)
+                else:
+                    cfg.depth_min = max(0.1, cfg.depth_min - step)
+                cfg.depth_min, cfg.depth_max = round(cfg.depth_min, 2), round(cfg.depth_max, 2)
+                print(f"거리 범위: {cfg.depth_min:.2f} ~ {cfg.depth_max:.2f} m")
             elif key in (13, 10):
                 if fusion.integrated < 5:
                     msg = "need more frames"
@@ -570,5 +594,6 @@ def run_scan(cfg: ScanConfig):
         cam.close()
         cv2.destroyAllWindows()
 
+    rec.depth_min, rec.depth_max = cfg.depth_min, cfg.depth_max
     print(f"메시 추출 중... (융합 프레임 {fusion.integrated}개)")
     return ScanResult(fusion.extract_mesh(), rec)

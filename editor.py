@@ -15,6 +15,9 @@ KOREAN_FONT = r"C:\Windows\Fonts\malgun.ttf"
 MESH_EXTS = (".ply", ".obj", ".stl")
 
 
+ANGLE_KEYS = {"rx_deg": "X 회전 (도)", "ry_deg": "Y 회전 (도)", "rz_deg": "Z 회전 (도)"}
+
+
 class Editor:
     def __init__(self, vertices=None, faces=None, colors=None, title="3D 스캔 편집기", default_dir=".",
                  name="", scans_dir=None, open_on_start=True):
@@ -88,14 +91,18 @@ class Editor:
             grid.add_child(gui.Label(label))
             grid.add_child(s)
             self.sliders[key] = s
-        yaw = gui.Slider(gui.Slider.DOUBLE)
-        yaw.set_limits(-90.0, 90.0)
-        yaw.double_value = 0.0
-        yaw.set_on_value_changed(lambda val: self._on_box("yaw_deg", val))
-        grid.add_child(gui.Label("회전 (도)"))
-        grid.add_child(yaw)
-        self.sliders["yaw_deg"] = yaw
+        for key, label in ANGLE_KEYS.items():
+            s = gui.Slider(gui.Slider.DOUBLE)
+            s.set_limits(-180.0, 180.0)
+            s.double_value = 0.0
+            s.set_on_value_changed(lambda val, k=key: self._on_box(k, val))
+            grid.add_child(gui.Label(label))
+            grid.add_child(s)
+            self.sliders[key] = s
         panel.add_child(grid)
+        hint = gui.Label("회전은 박스 가운데 기준. 기울여 자르면 그 바닥면이 STL의 바닥(z=0)이 됩니다")
+        hint.text_color = gui.Color(0.6, 0.6, 0.6)
+        panel.add_child(hint)
 
         row = gui.Horiz(0.25 * em)
         b = gui.Button("박스 초기화")
@@ -281,7 +288,8 @@ class Editor:
         def log(msg):
             print(msg)
             app.post_to_main_thread(self.window, lambda: setattr(self.status, "text", msg.strip()))
-        cfg = RefineConfig(depth_max=2.0 if rec.subject_mode else 1.0)
+        dmin, dmax = rec.refine_depth_range()
+        cfg = RefineConfig(depth_min=dmin, depth_max=dmax)
         cfg.seam_ref_frames = int(self.seam_ref.int_value)
         v, f, c, _ = Refiner(rec.K, rec.scale, cfg, subject_mode=rec.subject_mode, log=log).run(
             (len(rec), rec.frame), rec.poses, rec.passes)
@@ -317,13 +325,13 @@ class Editor:
 
     def _sync_slider(self, key):
         """박스 값(m, 회전은 도) → 슬라이더(mm, 도)."""
-        scale = 1.0 if key == "yaw_deg" else 1000.0
+        scale = 1.0 if key in ANGLE_KEYS else 1000.0
         self.sliders[key].double_value = scale * float(getattr(self.box, key))
 
     def _on_box(self, key, val):
         if self.v is None:
             return
-        setattr(self.box, key, float(val) if key == "yaw_deg" else float(val) / 1000.0)
+        setattr(self.box, key, float(val) if key in ANGLE_KEYS else float(val) / 1000.0)
         # 최소값이 최대값을 넘지 않게
         for a in "xyz":
             lo, hi = a + "min", a + "max"

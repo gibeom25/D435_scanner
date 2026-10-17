@@ -60,7 +60,8 @@ def _refine_recordings(recs, voxel, out_dir, seam_ref=None):
             poses.append(r.poses[i])
         offset += int(max(r.passes)) + 1 if len(r) else 0
     get = lambda k: recs[index[k][0]].frame(index[k][1])
-    cfg = RefineConfig(voxel_size=voxel, depth_max=2.0 if subject else 1.0)
+    ranges = [r.refine_depth_range() for r in recs]   # 여러 스캔을 합치면 모두 담기게
+    cfg = RefineConfig(voxel_size=voxel, depth_min=min(a for a, _ in ranges), depth_max=max(b for _, b in ranges))
     if seam_ref:
         cfg.seam_ref_frames = int(seam_ref)
     print(f"\n정밀 재구성 시작 (프레임 {len(index)}개, 패스 {len(set(passes))}개). 몇 분 걸릴 수 있습니다.")
